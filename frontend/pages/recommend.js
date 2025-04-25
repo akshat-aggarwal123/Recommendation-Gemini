@@ -1,8 +1,6 @@
 import { useState, useEffect } from 'react';
 import HabitCard from '../components/HabitCard';
 import { ArrowRight, Loader2, AlertCircle, ThumbsUp } from 'lucide-react';
-import { useSession } from 'next-auth/react';
-import useDebounce from '../hooks/useDebounce';
 
 export default function Recommend() {
   const [inputHabit, setInputHabit] = useState('');
@@ -11,18 +9,10 @@ export default function Recommend() {
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
   const [selectedTags, setSelectedTags] = useState([]);
-  const { data: session } = useSession();
   
-  // Popular habit tags
   const popularTags = ['fitness', 'health', 'productivity', 'mindfulness', 'learning', 'finance', 'social'];
-  
-  // API key from environment variable (more secure)
   const API_KEY = process.env.GEMINI_API_KEY;
-  
-  // Debounce the input to avoid making too many API calls
-  const debouncedInput = useDebounce(inputHabit, 500);
-  
-  // Clear success message after 3 seconds
+
   useEffect(() => {
     if (success) {
       const timer = setTimeout(() => setSuccess(false), 3000);
@@ -42,43 +32,27 @@ export default function Recommend() {
       setSuccess(false);
       
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${API_KEY}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${API_KEY}`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  {
-                    text: `Based on the habit "${habitTitle}"${tags.length > 0 ? ` with tags: ${tags.join(', ')}` : ''}, 
-                    suggest 5 similar or related habits that someone might want to track. 
-                    Make sure the recommendations are varied, practical, and specific.
-                    Format your response as a JSON array of objects, where each object has:
-                    - "title" field for the habit name (concise but specific)
-                    - "description" field with a brief explanation of the habit and its benefits (1-2 sentences)
-                    - "tags" field with an array of relevant tags/categories (2-4 tags)
-                    - "similarity" field with a number between 0 and 1 indicating similarity to original habit
-                    - "difficulty" field with "easy", "medium", or "hard"
-                    - "frequency" field with recommended tracking frequency like "daily", "weekly", etc.
-                    
-                    Example format:
-                    [
-                      {
-                        "title": "10-Minute Morning Meditation",
-                        "description": "Start each day with a focused meditation session to improve mindfulness and reduce stress.",
-                        "tags": ["wellness", "mental health", "morning routine"],
-                        "similarity": 0.85,
-                        "difficulty": "easy",
-                        "frequency": "daily"
-                      }
-                    ]`
-                  }
-                ]
-              }
-            ],
+            contents: [{
+              parts: [{
+                text: `Based on the habit "${habitTitle}"${tags.length > 0 ? ` with tags: ${tags.join(', ')}` : ''}, 
+                suggest 5 similar or related habits that someone might want to track. 
+                Make sure the recommendations are varied, practical, and specific.
+                Format your response as a JSON array of objects with:
+                - "title": habit name
+                - "description": brief explanation
+                - "tags": array of relevant tags
+                - "similarity": number between 0-1
+                - "difficulty": "easy", "medium", or "hard"
+                - "frequency": tracking frequency`
+              }]
+            }],
             generationConfig: {
               temperature: 0.7,
               maxOutputTokens: 1024
@@ -93,16 +67,11 @@ export default function Recommend() {
         throw new Error(data.error.message || "Error generating recommendations");
       }
 
-      // Extract the text content from the Gemini API response
       const textContent = data.candidates[0].content.parts[0].text;
-      
-      // Find JSON in the response and parse it
       const jsonMatch = textContent.match(/\[[\s\S]*\]/);
       if (!jsonMatch) throw new Error("Could not parse recommendation data");
       
       const recommendationsData = JSON.parse(jsonMatch[0]);
-      
-      // Add unique IDs to each recommendation
       const recommendationsWithIds = recommendationsData.map((rec, idx) => ({
         ...rec,
         id: `rec-${Date.now()}-${idx}`
@@ -110,37 +79,13 @@ export default function Recommend() {
       
       setRecommendations(recommendationsWithIds);
       setSuccess(true);
-      
-      // Save to history if user is logged in
-      if (session?.user) {
-        saveSearchToHistory(habitTitle, tags, recommendationsWithIds);
-      }
+
     } catch (err) {
       console.error("Error:", err);
       setError(err.message || "Failed to get recommendations");
       setRecommendations([]);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const saveSearchToHistory = async (query, tags, results) => {
-    try {
-      await fetch('/api/habit/history', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          userId: session.user.id,
-          query,
-          tags,
-          results: results.map(r => r.title),
-          timestamp: new Date()
-        })
-      });
-    } catch (err) {
-      console.error("Failed to save search history:", err);
     }
   };
 
@@ -151,19 +96,12 @@ export default function Recommend() {
   };
 
   const toggleTag = (tag) => {
-    if (selectedTags.includes(tag)) {
-      setSelectedTags(selectedTags.filter(t => t !== tag));
-    } else {
-      setSelectedTags([...selectedTags, tag]);
-    }
+    setSelectedTags(prev => 
+      prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
+    );
   };
 
   const addHabitToLibrary = async (habit) => {
-    if (!session?.user) {
-      setError("Please log in to save habits to your library");
-      return;
-    }
-    
     try {
       const response = await fetch('/api/habit/create', {
         method: 'POST',
@@ -171,7 +109,6 @@ export default function Recommend() {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          userId: session.user.id,
           title: habit.title,
           description: habit.description,
           tags: habit.tags,
@@ -180,10 +117,7 @@ export default function Recommend() {
         })
       });
       
-      if (!response.ok) {
-        throw new Error("Failed to save habit");
-      }
-      
+      if (!response.ok) throw new Error("Failed to save habit");
       setSuccess(`"${habit.title}" added to your habit library!`);
     } catch (err) {
       setError(err.message || "Failed to save habit");
@@ -279,7 +213,6 @@ export default function Recommend() {
                 difficulty={habit.difficulty}
                 frequency={habit.frequency}
                 onAddToLibrary={() => addHabitToLibrary(habit)}
-                isLoggedIn={!!session?.user}
               />
             ))}
           </div>
@@ -293,15 +226,9 @@ export default function Recommend() {
         </div>
       )}
       
-      {session?.user ? (
-        <p className="text-sm text-gray-500 mt-8">
-          Your recommendations will be saved to your search history.
-        </p>
-      ) : (
-        <p className="text-sm text-gray-500 mt-8">
-          <a href="/api/auth/signin" className="text-blue-600 hover:underline">Sign in</a> to save habits to your library and view your search history.
-        </p>
-      )}
+      <p className="text-sm text-gray-500 mt-8">
+        <a href="/login" className="text-blue-600 hover:underline">Sign in</a> to save habits to your library.
+      </p>
     </div>
   );
 }
